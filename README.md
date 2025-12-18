@@ -45,7 +45,7 @@ If everything was done correctly, you should see the debug overlay when the game
 ## Build
 
 Building requires Visual Studio 2026 with the "Desktop development with C++" workload in the Visual Studio Installer selected.  
-Open the solution and then build it as usual.
+Open the solution and then build it as usual. Preferably build using the Release x64 configuration, as I don't know if the Debug configuration will work.
 
 ## Credits
 
