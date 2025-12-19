@@ -10,6 +10,8 @@ using namespace std;
 #include <json.hpp>
 using json = nlohmann::json;
 
+// Everything right now is just dumped in here in this one file
+
 static YYTKInterface *g_interface = nullptr;
 
 struct SpriteData
@@ -26,7 +28,7 @@ vector<SpriteData> g_debugCollisionData;
 vector<SpriteData> g_debugCollisionDataBG;
 static bool g_showDebugCollision = false;
 
-void Print(const char* str)
+void Print(string str)
 {
 	g_interface->CallBuiltin("show_debug_message", {RValue(str)});
 }
@@ -35,6 +37,8 @@ void Print(const char* str)
 #define GM_C_BLACK RValue(0)
 
 #define GM_INVALID -1
+
+#define MOD_SETTINGS_FILE "antonblast_ab-mod_settings.ini"
 
 void DrawDebugCollisionDataBG()
 {
@@ -214,9 +218,12 @@ void GoToCustomLevelRoom()
 	}
 }
 
-void ChangeMainMenuPage(string name)
+static bool g_createdDebugMenu = false;
+static bool g_createdBorderlessToggle = false;
+
+void ChangeMenuPage(string menu, string name)
 {
-	RValue menuInst = GetInstance("ob_listMenu");
+	RValue menuInst = GetInstance(menu);
 	if (menuInst.IsUndefined())
 	{
 		Print("Not in a menu!");
@@ -235,6 +242,76 @@ void ChangeMainMenuPage(string name)
 	vector<RValue> argArray = {pageValue};
 	RValue funcArgs = RValue(argArray);
 	g_interface->CallBuiltin("method_call", {changePageFunc, funcArgs});
+}
+
+void AddItemToPage(RValue menu, string page, CInstance *item, int index = -1)
+{
+	RValue pageVar = g_interface->CallBuiltin("variable_instance_get", {menu, RValue(page)});
+	if (pageVar.IsUndefined())
+	{
+		Print("Invalid page specified: " + page);
+		return;
+	}
+	
+	if (index != -1)
+		g_interface->CallBuiltin("ds_list_insert", {pageVar, index, item});
+	else
+		g_interface->CallBuiltin("ds_list_add", {pageVar, item});
+}
+
+RValue CreateFakeMenuInstance(RValue menu)
+{
+	RValue defaultFont = g_interface->CallBuiltin("variable_instance_get", {menu, "defaultFont"});
+
+	// Create a fake struct consisting of the variables required
+	// by the menu button since menu.ToInstance() doesn't fucking work
+	map<string, RValue> fakeMenuInstanceMap;
+	fakeMenuInstanceMap["id"] = menu;
+	fakeMenuInstanceMap["defaultFont"] = defaultFont;
+	RValue fakeMenuInstance = RValue(fakeMenuInstanceMap);
+
+	return fakeMenuInstance;
+}
+
+// Incomplete.
+CInstance *CreateMenuButton(RValue menu, string text)
+{
+	RValue menuButton = g_interface->CallBuiltin("asset_get_index", {"menuButton"});
+	if (menuButton.ToInt32() == GM_INVALID)
+		return nullptr;
+
+	RValue fakeMenuInstance = CreateFakeMenuInstance(menu);
+
+	map<string, RValue> itemMap;
+	RValue item = RValue(itemMap);
+
+	CInstance *itemInst = item.ToInstance();
+	CInstance *menuInst = fakeMenuInstance.ToInstance();
+
+	RValue res = RValue();
+	g_interface->CallBuiltinEx(res, "script_execute", itemInst, menuInst, {menuButton, RValue(text)});
+
+	return itemInst;
+}
+
+CInstance *CreateMenuToggle(RValue menu, string text, RValue value, RValue object, RValue varName)
+{
+	RValue menuToggle = g_interface->CallBuiltin("asset_get_index", {"menuToggle"});
+	if (menuToggle.ToInt32() == GM_INVALID)
+		return nullptr;
+
+	RValue fakeMenuInstance = CreateFakeMenuInstance(menu);
+
+	map<string, RValue> itemMap;
+	RValue item = RValue(itemMap);
+
+	CInstance *itemInst = item.ToInstance();
+	CInstance *menuInst = fakeMenuInstance.ToInstance();
+
+	RValue res = RValue();
+	g_interface->CallBuiltinEx(res, "script_execute", itemInst, menuInst, {menuToggle, RValue(text), value, object, varName});
+
+	return itemInst;
 }
 
 void FrameCallback(FWFrame &frameCtx)
@@ -263,7 +340,7 @@ void FrameCallback(FWFrame &frameCtx)
 	{
 		RValue inputString = g_interface->CallBuiltin("get_string", {RValue("Type the variable name of the page you want to go to."), RValue("mainPage")});
 		if (inputString.ToString() != "")
-			ChangeMainMenuPage(inputString.ToString());
+			ChangeMenuPage("ob_listMenu", inputString.ToString());
 	}
 }
 
@@ -283,31 +360,6 @@ void EventCallback(FWCodeEvent &eventCtx)
 	{
 		// Create event
 		case 0:
-			if (event_object_name.ToString() == "ob_mainMenu")
-			{
-				RValue menu = GetInstance("ob_mainMenu");
-				if (menu.IsUndefined())
-				{
-					Print("No main menu instance found");
-					break;
-				}
-
-				RValue menuButton = g_interface->CallBuiltin("asset_get_index", {RValue("menuButton")});
-				if (menuButton.ToInt32() == GM_INVALID)
-					break;
-				
-				map<string, RValue> debugBtnMap;
-				RValue debugButton = RValue(debugBtnMap);
-
-				CInstance *debugInst = debugButton.ToInstance();
-				CInstance *menuInst = menu.ToInstance();
-
-				RValue res = RValue();
-				//g_interface->CallBuiltinEx(res, "script_execute", debugInst, menuInst, {menuButton, RValue("Debug")});
-
-				//RValue debugButton = RValue();
-				//g_interface->CallGameScriptEx(debugButton, "gml_Script_menuButton", menuInst.ToInstance(), menuInst.ToInstance(), {RValue("Debug")});
-			}
 			break;
 
 		// Destroy event
@@ -321,6 +373,29 @@ void EventCallback(FWCodeEvent &eventCtx)
 				// Step event
 				case 0:
 					break;
+
+				// End Step event
+				case 2:
+					// Create the debug button.
+					// This has to happen here and not in the create event above
+					// because this needs the variables that are created in the menus create event
+					// and the custom code is executed right before the event.
+					if (event_object_name.ToString() == "ob_mainMenu" && !g_createdDebugMenu)
+					{
+						RValue menu = GetInstance("ob_mainMenu");
+						if (menu.IsUndefined())
+						{
+							Print("No main menu instance found");
+							break;
+						}
+
+						RValue mouseEnabledValue = g_interface->CallBuiltin("variable_instance_get", {menu, "mouseEnabled"});
+						CInstance *mouseEnabledInst = CreateMenuToggle(menu, "Mouse Enabled", mouseEnabledValue, menu, "mouseEnabled");
+						AddItemToPage(menu, "mainPage", mouseEnabledInst);
+
+						g_createdDebugMenu = true;
+					}
+					break;
 			}
 			break;
 
@@ -330,13 +405,13 @@ void EventCallback(FWCodeEvent &eventCtx)
 			{
 				// Room start event
 				case 4:
-					// Get the sprite data from all of the debug collision objects
 					if (event_object_name.ToString() == "ob_camera")
 					{
 						RValue room = RValue();
 						g_interface->GetBuiltin("room", nullptr, NULL_INDEX, room);
 						RValue roomName = g_interface->CallBuiltin("room_get_name", {room});
 
+						// Load the custom room data if we are in the template room
 						if (roomName.ToString() == "rm_template_room")
 						{
 							RValue playerObject = g_interface->CallBuiltin("asset_get_index", {RValue("ob_player")});
@@ -367,6 +442,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 							}
 						}
 
+						// Get the sprite data from all of the debug collision objects
 						Print("Getting debug collision sprite data");
 
 						const char *colObjects[] = {"ob_block", "ob_passthrough", "ob_passthroughSlope14",
@@ -393,6 +469,9 @@ void EventCallback(FWCodeEvent &eventCtx)
 						g_debugCollisionData.clear();
 						g_debugCollisionDataBG.clear();
 					}
+
+					g_createdDebugMenu = false;
+					g_createdBorderlessToggle = false;
 					break;
 			}
 			break;
@@ -407,11 +486,62 @@ void EventCallback(FWCodeEvent &eventCtx)
 						DrawDebugCollisionDataBG();
 					if (g_showDebugCollision && event_object_name.ToString() == "ob_camera")
 						DrawDebugCollisionData();
+
+					if (event_object_name.ToString() == "ob_optionsMenu")
+					{
+						if (!g_createdBorderlessToggle)
+						{
+							RValue menu = GetInstance("ob_optionsMenu");
+							if (menu.IsUndefined())
+							{
+								Print("No options menu instance found");
+								break;
+							}
+
+							CInstance *globalInst{};
+							AurieStatus globalResult = g_interface->GetGlobalInstance(&globalInst);
+
+							if (!AurieSuccess(globalResult))
+								break;
+
+							RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
+							CInstance *bfullscreenInst = CreateMenuToggle(menu, "Borderless Fullscreen", bfullscreenValue, globalInst, "borderless_fullscreen");
+							AddItemToPage(menu, "displayPage", bfullscreenInst, 2);
+
+							g_createdBorderlessToggle = true;
+						}
+						
+						RValue prevBorderlessValue = g_interface->CallBuiltin("window_get_borderless_fullscreen", {});
+						RValue borderlessValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
+
+						if (prevBorderlessValue.ToBoolean() != borderlessValue.ToBoolean())
+						{
+							Print("Borderless fullscreen value has changed, setting borderless fullscreen mode");
+							g_interface->CallBuiltin("window_enable_borderless_fullscreen", {borderlessValue});
+						}
+					}
 					break;
 
 				// Draw Begin event
 				case 72:
 					break;
+			}
+			break;
+
+		// Clean Up event
+		case 12:
+			if (event_object_name.ToString() == "ob_listMenu")
+			{
+				g_createdDebugMenu = false;
+				g_createdBorderlessToggle = false;
+
+				// Write any custom settings to the ini file
+				g_interface->CallBuiltin("ini_open", {MOD_SETTINGS_FILE});
+
+				RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
+				g_interface->CallBuiltin("ini_write_real", {"Video", "BorderlessFullscreen", bfullscreenValue});
+
+				g_interface->CallBuiltin("ini_close", {});
 			}
 			break;
 	}
@@ -439,6 +569,17 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 	g_interface->CallBuiltin("show_debug_overlay", {RValue(true)});
 	g_interface->CallBuiltin("variable_global_set", {RValue("debug"), RValue(true)});
 	g_interface->CallBuiltin("variable_global_set", {RValue("debug_visible"), RValue(true)});
+
+	// This is where any custom settings will be read.
+	// I know the game uses JSON for its settings, but this is a lot quicker and simpler to do.
+	g_interface->CallBuiltin("ini_open", {MOD_SETTINGS_FILE});
+
+	// Borderless fullscreen option
+	RValue bfullscreenValue = g_interface->CallBuiltin("ini_read_real", {"Video", "BorderlessFullscreen", false});
+	g_interface->CallBuiltin("variable_global_set", {"borderless_fullscreen", bfullscreenValue});
+	g_interface->CallBuiltin("window_enable_borderless_fullscreen", {bfullscreenValue});
+
+	g_interface->CallBuiltin("ini_close", {});
 
 	return AURIE_SUCCESS;
 }
