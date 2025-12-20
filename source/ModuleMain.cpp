@@ -152,14 +152,14 @@ void DumpGlobalVariables()
 		g_interface->EnumInstanceMembers(globalInst, DumpVariableFunc);
 }
 
-void DumpPlayerVariables()
+void DumpObjectVariables(string name)
 {
-	Print("Dumping player variables...");
+	Print("Dumping object variables: " + name);
 
-	RValue inst = GetInstance("ob_player");
+	RValue inst = GetInstance(name);
 	if (inst.IsUndefined())
 	{
-		Print("No player instance found");
+		Print("No instance found for object " + name);
 		return;
 	}	
 	
@@ -219,20 +219,17 @@ void GoToCustomLevelRoom()
 }
 
 static bool g_createdDebugMenu = false;
-static bool g_createdBorderlessToggle = false;
+static bool g_createdCustomOptions = false;
 
-void ChangeMenuPage(string menu, string name)
+// Changes the current page in the menu.
+// NOTE: addToHistory is meant to be used as a boolean if specified.
+void ChangeMenuPage(RValue menu, string name, int addToHistory = -1)
 {
-	RValue menuInst = GetInstance(menu);
-	if (menuInst.IsUndefined())
-	{
-		Print("Not in a menu!");
+	RValue changePage = g_interface->CallBuiltin("variable_instance_get", {menu, RValue("changePage")});
+	if (changePage.IsUndefined())
 		return;
-	}
 
-	RValue changePageFunc = g_interface->CallBuiltin("variable_instance_get", {menuInst, RValue("changePage")});
-
-	RValue pageValue = g_interface->CallBuiltin("variable_instance_get", {menuInst, RValue(name)});
+	RValue pageValue = g_interface->CallBuiltin("variable_instance_get", {menu, RValue(name)});
 	if (pageValue.IsUndefined())
 	{
 		Print("Invalid page name!");
@@ -240,10 +237,34 @@ void ChangeMenuPage(string menu, string name)
 	}
 
 	vector<RValue> argArray = {pageValue};
+	if (addToHistory != -1)
+		argArray.push_back(addToHistory);
+
 	RValue funcArgs = RValue(argArray);
-	g_interface->CallBuiltin("method_call", {changePageFunc, funcArgs});
+	g_interface->CallBuiltin("method_call", {changePage, funcArgs});
 }
 
+// Creates a menu page.
+RValue CreateMenuPage(RValue menu)
+{
+	RValue pageCreate = g_interface->CallBuiltin("variable_instance_get", {menu, "pageCreate"});
+	if (pageCreate.IsUndefined())
+		return RValue();
+
+	RValue newPage = g_interface->CallBuiltin("method_call", {pageCreate});
+	return newPage;
+}
+
+// Adds a menu item to the page stored in an RValue.
+void AddItemToPageValue(RValue menu, RValue page, CInstance *item, int index = -1)
+{
+	if (index != -1)
+		g_interface->CallBuiltin("ds_list_insert", {page, index, item});
+	else
+		g_interface->CallBuiltin("ds_list_add", {page, item});
+}
+
+// Adds a menu item to a page.
 void AddItemToPage(RValue menu, string page, CInstance *item, int index = -1)
 {
 	RValue pageVar = g_interface->CallBuiltin("variable_instance_get", {menu, RValue(page)});
@@ -253,10 +274,7 @@ void AddItemToPage(RValue menu, string page, CInstance *item, int index = -1)
 		return;
 	}
 	
-	if (index != -1)
-		g_interface->CallBuiltin("ds_list_insert", {pageVar, index, item});
-	else
-		g_interface->CallBuiltin("ds_list_add", {pageVar, item});
+	AddItemToPageValue(menu, pageVar, item, index);
 }
 
 RValue CreateFakeMenuInstance(RValue menu)
@@ -273,8 +291,8 @@ RValue CreateFakeMenuInstance(RValue menu)
 	return fakeMenuInstance;
 }
 
-// Incomplete.
-CInstance *CreateMenuButton(RValue menu, string text)
+// Creates a menu button.
+CInstance *CreateMenuButton(RValue menu, string text, RValue buttonMethod, RValue params = RValue())
 {
 	RValue menuButton = g_interface->CallBuiltin("asset_get_index", {"menuButton"});
 	if (menuButton.ToInt32() == GM_INVALID)
@@ -289,11 +307,12 @@ CInstance *CreateMenuButton(RValue menu, string text)
 	CInstance *menuInst = fakeMenuInstance.ToInstance();
 
 	RValue res = RValue();
-	g_interface->CallBuiltinEx(res, "script_execute", itemInst, menuInst, {menuButton, RValue(text)});
+	g_interface->CallBuiltinEx(res, "script_execute", itemInst, menuInst, {menuButton, RValue(text), buttonMethod, params});
 
 	return itemInst;
 }
 
+// Creates a menu on/off toggle.
 CInstance *CreateMenuToggle(RValue menu, string text, RValue value, RValue object, RValue varName)
 {
 	RValue menuToggle = g_interface->CallBuiltin("asset_get_index", {"menuToggle"});
@@ -314,17 +333,87 @@ CInstance *CreateMenuToggle(RValue menu, string text, RValue value, RValue objec
 	return itemInst;
 }
 
+// Creates a menu button that goes to the specified page.
+CInstance *CreateChangePageButton(RValue menu, string text, RValue targetPage)
+{
+	RValue changePage = g_interface->CallBuiltin("variable_instance_get", {menu, "changePage"});
+	if (changePage.IsUndefined())
+		return nullptr;
+
+	CInstance *btn = CreateMenuButton(menu, text, changePage, targetPage);
+	return btn;
+}
+
+// Creates a menu button that goes back to the previous page.
+CInstance *CreateBackButton(RValue menu, string text)
+{
+	RValue popPage = g_interface->CallBuiltin("variable_instance_get", {menu, "popPage"});
+	if (popPage.IsUndefined())
+		return nullptr;
+
+	CInstance *backBtn = CreateMenuButton(menu, text, popPage);
+	return backBtn;
+}
+
+static bool g_debugControls = false;
+static bool g_skipSplash = false;
+static int g_debugOptionsIndex = -1;
+//static RValue g_debugOptionsHeaderFunc;
+
+RValue &EnvironmentGetUsernameHook(CInstance *self, CInstance *other, RValue &returnValue, int argCount, RValue **args)
+{
+	RValue selfValue = self->ToRValue();
+	RValue otherValue = other->ToRValue();
+
+	if (otherValue.IsStruct())
+	{
+		RValue displayExists = g_interface->CallBuiltin("struct_exists", {otherValue, "displayPage"});
+		if (displayExists.ToBoolean())
+		{
+			RValue pages = g_interface->CallBuiltin("struct_get", {otherValue, "pages"});
+			RValue currentPage = g_interface->CallBuiltin("struct_get", {otherValue, "currentPage"});
+			RValue currentIndex = g_interface->CallBuiltin("array_get_index", {pages, currentPage});
+
+			if (currentIndex.ToInt32() == g_debugOptionsIndex)
+				returnValue = "Debug";
+			else
+			{
+				//RValue headerValue = g_interface->CallBuiltin("method_call", {g_debugOptionsHeaderFunc});
+				//returnValue = headerValue;
+			}
+		}
+		else
+			goto environment_get_username_func;
+	}
+	else
+		goto environment_get_username_func;
+
+	return returnValue;
+
+environment_get_username_func:
+	RValue username = g_interface->CallBuiltin("environment_get_variable", {"USERNAME"});
+	returnValue = username;
+	return returnValue;
+}
+
 void FrameCallback(FWFrame &frameCtx)
 {
 	UNREFERENCED_PARAMETER(frameCtx);
+
+	if (!g_debugControls)
+		return;
 
 	RValue dumpGlobalPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F1)});
 	if (dumpGlobalPress.ToBoolean())
 		DumpGlobalVariables();
 
-	RValue dumpPlayerPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F2)});
-	if (dumpPlayerPress.ToBoolean())
-		DumpPlayerVariables();
+	RValue dumpObjectPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F2)});
+	if (dumpObjectPress.ToBoolean())
+	{
+		RValue inputString = g_interface->CallBuiltin("get_string", {RValue("Type the name of the object you want to dump all of the variables from."), RValue("ob_player")});
+		if (inputString.ToString() != "")
+			DumpObjectVariables(inputString.ToString());
+	}
 
 	RValue gotoTemplateRoom = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F3)});
 	if (gotoTemplateRoom.ToBoolean())
@@ -340,7 +429,16 @@ void FrameCallback(FWFrame &frameCtx)
 	{
 		RValue inputString = g_interface->CallBuiltin("get_string", {RValue("Type the variable name of the page you want to go to."), RValue("mainPage")});
 		if (inputString.ToString() != "")
-			ChangeMenuPage("ob_listMenu", inputString.ToString());
+		{
+			RValue menuInst = GetInstance("ob_listMenu");
+			if (menuInst.IsUndefined())
+			{
+				Print("Not in a menu!");
+				return;
+			}
+
+			ChangeMenuPage(menuInst, inputString.ToString());
+		}
 	}
 }
 
@@ -376,7 +474,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 
 				// End Step event
 				case 2:
-					// Create the debug button.
+					// Create the debug menu and button.
 					// This has to happen here and not in the create event above
 					// because this needs the variables that are created in the menus create event
 					// and the custom code is executed right before the event.
@@ -389,9 +487,20 @@ void EventCallback(FWCodeEvent &eventCtx)
 							break;
 						}
 
-						RValue mouseEnabledValue = g_interface->CallBuiltin("variable_instance_get", {menu, "mouseEnabled"});
-						CInstance *mouseEnabledInst = CreateMenuToggle(menu, "Mouse Enabled", mouseEnabledValue, menu, "mouseEnabled");
-						AddItemToPage(menu, "mainPage", mouseEnabledInst);
+						/*
+						RValue debugPage = CreateMenuPage(menu);
+						{
+							RValue mouseEnabledValue = g_interface->CallBuiltin("variable_instance_get", {menu, "mouseEnabled"});
+							CInstance *mouseToggle = CreateMenuToggle(menu, "Mouse Enabled", mouseEnabledValue, menu, "mouseEnabled");
+							AddItemToPageValue(menu, debugPage, mouseToggle);
+
+							CInstance *backBtn = CreateBackButton(menu, "Back");
+							AddItemToPageValue(menu, debugPage, backBtn);
+						}
+
+						CInstance *debugMenuBtn = CreateChangePageButton(menu, "Debug", debugPage);
+						AddItemToPage(menu, "mainPage", debugMenuBtn);
+						*/
 
 						g_createdDebugMenu = true;
 					}
@@ -441,6 +550,15 @@ void EventCallback(FWCodeEvent &eventCtx)
 								g_interface->CallBuiltin("variable_instance_set", {oinst, RValue("image_yscale"), RValue(oyscale)});
 							}
 						}
+						else if (roomName.ToString() == "rm_splashScreen" && g_skipSplash)
+						{
+							RValue rm_logoDrop = g_interface->CallBuiltin("asset_get_index", {"rm_logoDrop"});
+							if (rm_logoDrop.ToInt32() != GM_INVALID)
+							{
+								Print("Skip splash screens");
+								g_interface->CallBuiltin("room_goto", {rm_logoDrop});
+							}
+						}
 
 						// Get the sprite data from all of the debug collision objects
 						Print("Getting debug collision sprite data");
@@ -471,7 +589,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 					}
 
 					g_createdDebugMenu = false;
-					g_createdBorderlessToggle = false;
+					g_createdCustomOptions = false;
 					break;
 			}
 			break;
@@ -487,9 +605,10 @@ void EventCallback(FWCodeEvent &eventCtx)
 					if (g_showDebugCollision && event_object_name.ToString() == "ob_camera")
 						DrawDebugCollisionData();
 
+					// Create all of the custom options.
 					if (event_object_name.ToString() == "ob_optionsMenu")
 					{
-						if (!g_createdBorderlessToggle)
+						if (!g_createdCustomOptions)
 						{
 							RValue menu = GetInstance("ob_optionsMenu");
 							if (menu.IsUndefined())
@@ -504,11 +623,45 @@ void EventCallback(FWCodeEvent &eventCtx)
 							if (!AurieSuccess(globalResult))
 								break;
 
+							RValue debugPage = CreateMenuPage(menu);
+							{
+								RValue debugOverlayValue = g_interface->CallBuiltin("variable_global_get", {"debug_overlay"});
+								CInstance *debugOverlayInst = CreateMenuToggle(menu, "Debug Overlay", debugOverlayValue, globalInst, "debug_overlay");
+								AddItemToPageValue(menu, debugPage, debugOverlayInst);
+
+								RValue debugControlsValue = g_interface->CallBuiltin("variable_global_get", {"debug_controls"});
+								CInstance *debugControlsInst = CreateMenuToggle(menu, "Debug Controls", debugControlsValue, globalInst, "debug_controls");
+								AddItemToPageValue(menu, debugPage, debugControlsInst);
+
+								RValue skipSplashValue = g_interface->CallBuiltin("variable_global_get", {"skip_splash"});
+								CInstance *skipSplashInst = CreateMenuToggle(menu, "Skip Splash Screens", skipSplashValue, globalInst, "skip_splash");
+								AddItemToPageValue(menu, debugPage, skipSplashInst);
+
+								CInstance *backBtn = CreateBackButton(menu, "Back");
+								AddItemToPageValue(menu, debugPage, backBtn);
+							}
+
+							RValue pages = g_interface->CallBuiltin("variable_instance_get", {menu, "pages"});
+							RValue debugPageIndex = g_interface->CallBuiltin("array_get_index", {pages, debugPage});
+							g_debugOptionsIndex = debugPageIndex.ToInt32();
+
+							//RValue getPageHeader = g_interface->CallBuiltin("variable_instance_get", {menu, "getPageHeader"});
+							//g_debugOptionsHeaderFunc = getPageHeader;
+
+							RValue environment_get_username = g_interface->CallBuiltin("variable_global_get", {"environment_get_username"});
+							g_interface->CallBuiltin("variable_instance_set", {menu, "getPageHeader", environment_get_username});
+
+							// For some reason creating a page in the options menu also changes the current page to it
+							ChangeMenuPage(menu, "mainPage", false);
+
+							CInstance *debugPageBtn = CreateChangePageButton(menu, "Debug", debugPage);
+							AddItemToPage(menu, "mainPage", debugPageBtn, 5);
+
 							RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
 							CInstance *bfullscreenInst = CreateMenuToggle(menu, "Borderless Fullscreen", bfullscreenValue, globalInst, "borderless_fullscreen");
 							AddItemToPage(menu, "displayPage", bfullscreenInst, 2);
 
-							g_createdBorderlessToggle = true;
+							g_createdCustomOptions = true;
 						}
 						
 						RValue prevBorderlessValue = g_interface->CallBuiltin("window_get_borderless_fullscreen", {});
@@ -533,13 +686,25 @@ void EventCallback(FWCodeEvent &eventCtx)
 			if (event_object_name.ToString() == "ob_listMenu")
 			{
 				g_createdDebugMenu = false;
-				g_createdBorderlessToggle = false;
+				g_createdCustomOptions = false;
 
 				// Write any custom settings to the ini file
 				g_interface->CallBuiltin("ini_open", {MOD_SETTINGS_FILE});
 
 				RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
 				g_interface->CallBuiltin("ini_write_real", {"Video", "BorderlessFullscreen", bfullscreenValue});
+
+				RValue debugOverlayValue = g_interface->CallBuiltin("variable_global_get", {"debug_overlay"});
+				g_interface->CallBuiltin("ini_write_real", {"Debug", "DebugOverlay", debugOverlayValue});
+				g_interface->CallBuiltin("show_debug_overlay", {debugOverlayValue});
+
+				RValue debugControlsValue = g_interface->CallBuiltin("variable_global_get", {"debug_controls"});
+				g_interface->CallBuiltin("ini_write_real", {"Debug", "DebugControls", debugControlsValue});
+				g_debugControls = debugControlsValue.ToBoolean();
+
+				RValue skipSplashValue = g_interface->CallBuiltin("variable_global_get", {"skip_splash"});
+				g_interface->CallBuiltin("ini_write_real", {"Debug", "SkipSplash", skipSplashValue});
+				g_skipSplash = skipSplashValue.ToBoolean();
 
 				g_interface->CallBuiltin("ini_close", {});
 			}
@@ -565,8 +730,7 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 	if (!AurieSuccess(status))
 		printf("Failed to create event callback\n");
 
-	// Enable debug overlay
-	g_interface->CallBuiltin("show_debug_overlay", {RValue(true)});
+	// I don't know if this does anything
 	g_interface->CallBuiltin("variable_global_set", {RValue("debug"), RValue(true)});
 	g_interface->CallBuiltin("variable_global_set", {RValue("debug_visible"), RValue(true)});
 
@@ -574,12 +738,42 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 	// I know the game uses JSON for its settings, but this is a lot quicker and simpler to do.
 	g_interface->CallBuiltin("ini_open", {MOD_SETTINGS_FILE});
 
-	// Borderless fullscreen option
+	// Borderless fullscreen
 	RValue bfullscreenValue = g_interface->CallBuiltin("ini_read_real", {"Video", "BorderlessFullscreen", false});
 	g_interface->CallBuiltin("variable_global_set", {"borderless_fullscreen", bfullscreenValue});
 	g_interface->CallBuiltin("window_enable_borderless_fullscreen", {bfullscreenValue});
 
+	// Debug overlay
+	RValue debugOverlayValue = g_interface->CallBuiltin("ini_read_real", {"Debug", "DebugOverlay", false});
+	g_interface->CallBuiltin("variable_global_set", {"debug_overlay", debugOverlayValue});
+	g_interface->CallBuiltin("show_debug_overlay", {debugOverlayValue});
+
+	// Debug controls
+	RValue debugControlsValue = g_interface->CallBuiltin("ini_read_real", {"Debug", "DebugControls", false});
+	g_interface->CallBuiltin("variable_global_set", {"debug_controls", debugControlsValue});
+	g_debugControls = debugControlsValue.ToBoolean();
+
+	// Skip splash screens
+	RValue skipSplashValue = g_interface->CallBuiltin("ini_read_real", {"Debug", "SkipSplash", false});
+	g_interface->CallBuiltin("variable_global_set", {"skip_splash", skipSplashValue});
+	g_skipSplash = skipSplashValue.ToBoolean();
+
 	g_interface->CallBuiltin("ini_close", {});
+
+	// Hook into environment_get_username to override the options menu header later
+	// I'm pretty certain this function is not used in the game at all so hooking into it is fine
+	CScript *scrData = nullptr;
+	int scrIndex = 0;
+	TRoutine scrFunction = nullptr;
+
+	status = g_interface->GetNamedRoutinePointer("gml_Script_environment_get_username", reinterpret_cast<PVOID*>(&scrData));
+	if (!AurieSuccess(status))
+		Print("Failed to get function data");
+	else
+	{
+		Print("Hooking into environment_get_username...");
+		MmCreateHook(Module, "environment_get_username_hook", scrData->m_Functions->m_ScriptFunction, EnvironmentGetUsernameHook, reinterpret_cast<PVOID*>(&scrFunction));
+	}
 
 	return AURIE_SUCCESS;
 }
