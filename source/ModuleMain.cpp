@@ -1,10 +1,4 @@
-#include <YYToolkit/YYTK_Shared.hpp>
-using namespace Aurie;
-using namespace YYTK;
-
-#include <vector>
-#include <map>
-using namespace std;
+#include "main.h"
 
 #include <fstream>
 #include <json.hpp>
@@ -12,7 +6,7 @@ using json = nlohmann::json;
 
 // Everything right now is just dumped in here in this one file
 
-static YYTKInterface *g_interface = nullptr;
+YYTKInterface *g_interface = nullptr;
 
 struct SpriteData
 {
@@ -32,13 +26,6 @@ void Print(string str)
 {
 	g_interface->CallBuiltin("show_debug_message", {RValue(str)});
 }
-
-#define GM_C_WHITE RValue(16777215)
-#define GM_C_BLACK RValue(0)
-
-#define GM_INVALID -1
-
-#define MOD_SETTINGS_FILE "antonblast_ab-mod_settings.ini"
 
 void DrawDebugCollisionDataBG()
 {
@@ -358,8 +345,8 @@ CInstance *CreateBackButton(RValue menu, string text)
 static bool g_debugControls = false;
 static bool g_skipSplash = false;
 static int g_debugOptionsIndex = -1;
-//static RValue g_debugOptionsHeaderFunc;
 
+// Hook used for changing the header text in the options menu.
 RValue &EnvironmentGetUsernameHook(CInstance *self, CInstance *other, RValue &returnValue, int argCount, RValue **args)
 {
 	RValue selfValue = self->ToRValue();
@@ -378,8 +365,9 @@ RValue &EnvironmentGetUsernameHook(CInstance *self, CInstance *other, RValue &re
 				returnValue = "Debug";
 			else
 			{
-				//RValue headerValue = g_interface->CallBuiltin("method_call", {g_debugOptionsHeaderFunc});
-				//returnValue = headerValue;
+				RValue getPageHeader = g_interface->CallBuiltin("struct_get", {otherValue, "getPageHeaderOriginal"});
+				RValue headerValue = g_interface->CallBuiltin("method_call", {getPageHeader});
+				returnValue = headerValue;
 			}
 		}
 		else
@@ -645,17 +633,17 @@ void EventCallback(FWCodeEvent &eventCtx)
 							RValue debugPageIndex = g_interface->CallBuiltin("array_get_index", {pages, debugPage});
 							g_debugOptionsIndex = debugPageIndex.ToInt32();
 
-							//RValue getPageHeader = g_interface->CallBuiltin("variable_instance_get", {menu, "getPageHeader"});
-							//g_debugOptionsHeaderFunc = getPageHeader;
+							RValue getPageHeader = g_interface->CallBuiltin("variable_instance_get", {menu, "getPageHeader"});
+							g_interface->CallBuiltin("variable_instance_set", {menu, "getPageHeaderOriginal", getPageHeader});
 
 							RValue environment_get_username = g_interface->CallBuiltin("variable_global_get", {"environment_get_username"});
 							g_interface->CallBuiltin("variable_instance_set", {menu, "getPageHeader", environment_get_username});
 
-							// For some reason creating a page in the options menu also changes the current page to it
-							ChangeMenuPage(menu, "mainPage", false);
-
 							CInstance *debugPageBtn = CreateChangePageButton(menu, "Debug", debugPage);
 							AddItemToPage(menu, "mainPage", debugPageBtn, 5);
+
+							// For some reason creating a page in the options menu also changes the current page to it
+							ChangeMenuPage(menu, "mainPage", false);
 
 							RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
 							CInstance *bfullscreenInst = CreateMenuToggle(menu, "Borderless Fullscreen", bfullscreenValue, globalInst, "borderless_fullscreen");
@@ -730,9 +718,11 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 	if (!AurieSuccess(status))
 		printf("Failed to create event callback\n");
 
+	Print("Mod successfully initialized!");
+
 	// I don't know if this does anything
-	g_interface->CallBuiltin("variable_global_set", {RValue("debug"), RValue(true)});
-	g_interface->CallBuiltin("variable_global_set", {RValue("debug_visible"), RValue(true)});
+	//g_interface->CallBuiltin("variable_global_set", {RValue("debug"), RValue(true)});
+	//g_interface->CallBuiltin("variable_global_set", {RValue("debug_visible"), RValue(true)});
 
 	// This is where any custom settings will be read.
 	// I know the game uses JSON for its settings, but this is a lot quicker and simpler to do.
@@ -763,7 +753,6 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 	// Hook into environment_get_username to override the options menu header later
 	// I'm pretty certain this function is not used in the game at all so hooking into it is fine
 	CScript *scrData = nullptr;
-	int scrIndex = 0;
 	TRoutine scrFunction = nullptr;
 
 	status = g_interface->GetNamedRoutinePointer("gml_Script_environment_get_username", reinterpret_cast<PVOID*>(&scrData));
