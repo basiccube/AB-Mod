@@ -5,6 +5,7 @@ A mod for ANTONBLAST, made possible thanks to Aurie Framework and YYToolkit.
 Currently features the following:
 * Access to the GameMaker debug overlay
 * Some basic debug functionality (such as debug collision visibility)
+* Borderless fullscreen option
 * Custom room loading functionality (WIP)
 
 There are a few keys that have been added that do some sort of action:
