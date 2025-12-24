@@ -1,15 +1,11 @@
 #include "main.h"
 #include "IniFile.h"
+#include "Variables.h"
 #include "Menus.h"
 #include "DebugCollision.h"
 #include "RoomLoader.h"
 
 YYTKInterface *g_interface = nullptr;
-
-void Print(RValue str)
-{
-	g_interface->CallBuiltin("show_debug_message", {str});
-}
 
 RValue GetInstance(string name)
 {
@@ -18,7 +14,7 @@ RValue GetInstance(string name)
 
 	for (int i = 0; i < instNum.ToInt32(); i++)
 	{
-		RValue inst = g_interface->CallBuiltin("instance_find", {obj, RValue(i)});
+		RValue inst = g_interface->CallBuiltin("instance_find", {obj, i});
 		if (!inst.IsUndefined())
 			return inst;
 	}
@@ -53,11 +49,9 @@ void DumpObjectVariables(string name)
 		return;
 	}	
 	
-	RValue arr = g_interface->CallBuiltin("variable_instance_get_names", {inst});
-
-	vector<RValue> nameArr = arr.ToVector();
-	for (int j = 0; j < nameArr.size(); j++)
-		g_interface->CallBuiltin("show_debug_message", {nameArr[j]});
+	vector<string> arr = GetInstanceVariableNames(inst);
+	for (string str : arr)
+		Print(RValue(str));
 }
 
 static bool g_createdDebugMenu = false;
@@ -113,32 +107,32 @@ void FrameCallback(FWFrame &frameCtx)
 	if (!g_debugControls)
 		return;
 
-	RValue dumpGlobalPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F1)});
+	RValue dumpGlobalPress = g_interface->CallBuiltin("keyboard_check_pressed", {VK_F1});
 	if (dumpGlobalPress.ToBoolean())
 		DumpGlobalVariables();
 
-	RValue dumpObjectPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F2)});
+	RValue dumpObjectPress = g_interface->CallBuiltin("keyboard_check_pressed", {VK_F2});
 	if (dumpObjectPress.ToBoolean())
 	{
-		RValue inputString = g_interface->CallBuiltin("get_string", {RValue("Type the name of the object you want to dump all of the variables from."), RValue("ob_player")});
-		if (inputString.ToString() != "")
-			DumpObjectVariables(inputString.ToString());
+		string inputString = ShowStringInputPopup("Type the name of the object you want to dump all of the variables from:", "ob_player");
+		if (inputString != "")
+			DumpObjectVariables(inputString);
 	}
 
-	RValue gotoTemplateRoom = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F3)});
+	RValue gotoTemplateRoom = g_interface->CallBuiltin("keyboard_check_pressed", {VK_F3});
 	if (gotoTemplateRoom.ToBoolean())
 		GoToRoomLoaderRoom();
 
 	bool prevDebugCollision = g_showDebugCollision;
-	RValue colKeyPress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F4)});
+	RValue colKeyPress = g_interface->CallBuiltin("keyboard_check_pressed", {VK_F4});
 	if (colKeyPress.ToBoolean())
 		g_showDebugCollision = !g_showDebugCollision;
 
-	RValue changePagePress = g_interface->CallBuiltin("keyboard_check_pressed", {RValue(VK_F5)});
+	RValue changePagePress = g_interface->CallBuiltin("keyboard_check_pressed", {VK_F5});
 	if (changePagePress.ToBoolean())
 	{
-		RValue inputString = g_interface->CallBuiltin("get_string", {RValue("Type the variable name of the page you want to go to."), RValue("mainPage")});
-		if (inputString.ToString() != "")
+		string inputString = ShowStringInputPopup("Type the variable name of the page you want to go to:", "mainPage");
+		if (inputString != "")
 		{
 			RValue menuInst = GetInstance("ob_listMenu");
 			if (menuInst.IsUndefined())
@@ -147,7 +141,7 @@ void FrameCallback(FWFrame &frameCtx)
 				return;
 			}
 
-			ChangeMenuPage(menuInst, inputString.ToString());
+			ChangeMenuPage(menuInst, inputString);
 		}
 	}
 }
@@ -184,44 +178,36 @@ void EventCallback(FWCodeEvent &eventCtx)
 
 				// Begin Step event
 				case 1:
-					if (event_object_name.ToString() == "ob_player")
+					if (event_object_name.ToString() == "ob_player" && g_debugOverlayOpen)
 					{
-						RValue debugOverlayOpen = g_interface->CallBuiltin("is_debug_overlay_open", {});
-						if (debugOverlayOpen.ToBoolean())
+						bool debugCheck = IsKeyboardUsedByDebugOverlay();
+						RValue playerInputManager = g_interface->CallBuiltin("asset_get_index", {"ob_playerInputManager"});
+						RValue instCheck = g_interface->CallBuiltin("instance_exists", {playerInputManager});
+						if (debugCheck)
 						{
-							RValue playerInputManager = g_interface->CallBuiltin("asset_get_index", {"ob_playerInputManager"});
-							RValue debugCheck = g_interface->CallBuiltin("is_keyboard_used_debug_overlay", {});
-							RValue instCheck = g_interface->CallBuiltin("instance_exists", {playerInputManager});
-							if (debugCheck.ToBoolean())
-							{
-								if (instCheck.ToBoolean())
-									g_interface->CallBuiltin("instance_deactivate_object", {playerInputManager});
-							}
-							else
-							{
-								if (!instCheck.ToBoolean())
-									g_interface->CallBuiltin("instance_activate_object", {playerInputManager});
-							}
+							if (instCheck.ToBoolean())
+								g_interface->CallBuiltin("instance_deactivate_object", {playerInputManager});
+						}
+						else
+						{
+							if (!instCheck.ToBoolean())
+								g_interface->CallBuiltin("instance_activate_object", {playerInputManager});
 						}
 					}
-					else if (event_object_name.ToString() == "ob_camera")
+					else if (event_object_name.ToString() == "ob_camera" && g_debugOverlayOpen)
 					{
-						RValue debugOverlayOpen = g_interface->CallBuiltin("is_debug_overlay_open", {});
-						if (debugOverlayOpen.ToBoolean())
+						bool debugCheck = IsKeyboardUsedByDebugOverlay();
+						RValue globalInput = g_interface->CallBuiltin("asset_get_index", {"ob_globalInput"});
+						RValue instCheck = g_interface->CallBuiltin("instance_exists", {globalInput});
+						if (debugCheck)
 						{
-							RValue globalInput = g_interface->CallBuiltin("asset_get_index", {"ob_globalInput"});
-							RValue debugCheck = g_interface->CallBuiltin("is_keyboard_used_debug_overlay", {});
-							RValue instCheck = g_interface->CallBuiltin("instance_exists", {globalInput});
-							if (debugCheck.ToBoolean())
-							{
-								if (instCheck.ToBoolean())
-									g_interface->CallBuiltin("instance_deactivate_object", {globalInput});
-							}
-							else
-							{
-								if (!instCheck.ToBoolean())
-									g_interface->CallBuiltin("instance_activate_object", {globalInput});
-							}
+							if (instCheck.ToBoolean())
+								g_interface->CallBuiltin("instance_deactivate_object", {globalInput});
+						}
+						else
+						{
+							if (!instCheck.ToBoolean())
+								g_interface->CallBuiltin("instance_activate_object", {globalInput});
 						}
 					}
 					break;
@@ -298,8 +284,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 					{
 						ClearDebugCollisionData();
 						
-						RValue debugOverlayOpen = g_interface->CallBuiltin("is_debug_overlay_open", {});
-						if (debugOverlayOpen.ToBoolean())
+						if (g_debugOverlayOpen)
 						{
 							RValue playerInputManager = g_interface->CallBuiltin("asset_get_index", {"ob_playerInputManager"});
 							RValue globalInput = g_interface->CallBuiltin("asset_get_index", {"ob_globalInput"});
@@ -346,15 +331,15 @@ void EventCallback(FWCodeEvent &eventCtx)
 
 							RValue debugPage = CreateMenuPage(menu);
 							{
-								RValue debugOverlayValue = g_interface->CallBuiltin("variable_global_get", {"debug_overlay"});
+								RValue debugOverlayValue = GetGlobalVariable("debug_overlay");
 								CInstance *debugOverlayInst = CreateMenuToggle(menu, "Debug Overlay", debugOverlayValue, globalInst, "debug_overlay");
 								AddItemToPageValue(menu, debugPage, debugOverlayInst);
 
-								RValue debugControlsValue = g_interface->CallBuiltin("variable_global_get", {"debug_controls"});
+								RValue debugControlsValue = GetGlobalVariable("debug_controls");
 								CInstance *debugControlsInst = CreateMenuToggle(menu, "Debug Controls", debugControlsValue, globalInst, "debug_controls");
 								AddItemToPageValue(menu, debugPage, debugControlsInst);
 
-								RValue skipSplashValue = g_interface->CallBuiltin("variable_global_get", {"skip_splash"});
+								RValue skipSplashValue = GetGlobalVariable("skip_splash");
 								CInstance *skipSplashInst = CreateMenuToggle(menu, "Skip Splash Screens", skipSplashValue, globalInst, "skip_splash");
 								AddItemToPageValue(menu, debugPage, skipSplashInst);
 
@@ -362,15 +347,15 @@ void EventCallback(FWCodeEvent &eventCtx)
 								AddItemToPageValue(menu, debugPage, backBtn);
 							}
 
-							RValue pages = g_interface->CallBuiltin("variable_instance_get", {menu, "pages"});
+							RValue pages = GetInstanceVariable(menu, "pages");
 							RValue debugPageIndex = g_interface->CallBuiltin("array_get_index", {pages, debugPage});
 							g_debugOptionsIndex = debugPageIndex.ToInt32();
 
-							RValue getPageHeader = g_interface->CallBuiltin("variable_instance_get", {menu, "getPageHeader"});
-							g_interface->CallBuiltin("variable_instance_set", {menu, "getPageHeaderOriginal", getPageHeader});
+							RValue getPageHeader = GetInstanceVariable(menu, "getPageHeader");
+							SetInstanceVariable(menu, "getPageHeaderOriginal", getPageHeader);
 
-							RValue environment_get_username = g_interface->CallBuiltin("variable_global_get", {"environment_get_username"});
-							g_interface->CallBuiltin("variable_instance_set", {menu, "getPageHeader", environment_get_username});
+							RValue environment_get_username = GetGlobalVariable("environment_get_username");
+							SetInstanceVariable(menu, "getPageHeader", environment_get_username);
 
 							CInstance *debugPageBtn = CreateChangePageButton(menu, "Debug", debugPage);
 							AddItemToPage(menu, "mainPage", debugPageBtn, 5);
@@ -378,7 +363,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 							// For some reason creating a page in the options menu also changes the current page to it
 							ChangeMenuPage(menu, "mainPage", false);
 
-							RValue bfullscreenValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
+							RValue bfullscreenValue = GetGlobalVariable("borderless_fullscreen");
 							CInstance *bfullscreenInst = CreateMenuToggle(menu, "Borderless Fullscreen", bfullscreenValue, globalInst, "borderless_fullscreen");
 							AddItemToPage(menu, "displayPage", bfullscreenInst, 2);
 
@@ -386,7 +371,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 						}
 						
 						RValue prevBorderlessValue = g_interface->CallBuiltin("window_get_borderless_fullscreen", {});
-						RValue borderlessValue = g_interface->CallBuiltin("variable_global_get", {"borderless_fullscreen"});
+						RValue borderlessValue = GetGlobalVariable("borderless_fullscreen");
 
 						if (prevBorderlessValue.ToBoolean() != borderlessValue.ToBoolean())
 						{
@@ -415,7 +400,7 @@ void EventCallback(FWCodeEvent &eventCtx)
 				GetGlobalAndWriteToIni({"Video", "BorderlessFullscreen"}, "borderless_fullscreen");
 
 				RValue debugOverlayValue = GetGlobalAndWriteToIni({"Debug", "DebugOverlay"}, "debug_overlay");
-				g_interface->CallBuiltin("show_debug_overlay", {debugOverlayValue});
+				ShowDebugOverlay(debugOverlayValue.ToBoolean());
 
 				RValue debugControlsValue = GetGlobalAndWriteToIni({"Debug", "DebugControls"}, "debug_controls");
 				g_debugControls = debugControlsValue.ToBoolean();
@@ -510,7 +495,7 @@ EXPORTED AurieStatus ModuleInitialize(IN AurieModule* Module, IN const fs::path&
 
 	// Debug overlay
 	RValue debugOverlayValue = ReadAndSetGlobalFromIni({"Debug", "DebugOverlay", false}, "debug_overlay");
-	g_interface->CallBuiltin("show_debug_overlay", {debugOverlayValue});
+	ShowDebugOverlay(debugOverlayValue.ToBoolean());
 
 	// Debug controls
 	RValue debugControlsValue = ReadAndSetGlobalFromIni({"Debug", "DebugControls", false}, "debug_controls");

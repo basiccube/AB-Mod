@@ -143,14 +143,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="include\YYToolkit\YYTK_Shared_Types.cpp" />
+    <ClCompile Include="source\Debug.cpp" />
     <ClCompile Include="source\DebugCollision.cpp" />
     <ClCompile Include="source\IniFile.cpp" />
     <ClCompile Include="source\Menus.cpp" />
     <ClCompile Include="source\Main.cpp" />
     <ClCompile Include="source\RoomLoader.cpp" />
+    <ClCompile Include="source\Variables.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\Aurie\shared.hpp" />
+    <ClInclude Include="include\Debug.h" />
     <ClInclude Include="include\DebugCollision.h" />
     <ClInclude Include="include\FunctionWrapper\FunctionWrapper.hpp" />
     <ClInclude Include="include\IniFile.h" />
@@ -158,6 +161,7 @@
     <ClInclude Include="include\main.h" />
     <ClInclude Include="include\Menus.h" />
     <ClInclude Include="include\RoomLoader.h" />
+    <ClInclude Include="include\Variables.h" />
     <ClInclude Include="include\YYToolkit\YYTK_Shared.hpp" />
     <ClInclude Include="include\YYToolkit\YYTK_Shared_Base.hpp" />
     <ClInclude Include="include\YYToolkit\YYTK_Shared_Interface.hpp" />

@@ -9,6 +9,8 @@ using namespace YYTK;
 #include <map>
 using namespace std;
 
+#include "Debug.h"
+
 extern YYTKInterface *g_interface;
 
 #define GM_C_WHITE RValue(16777215)
@@ -17,8 +19,6 @@ extern YYTKInterface *g_interface;
 #define GM_INVALID -1
 
 #define MOD_SETTINGS_FILE "antonblast_ab-mod_settings.ini"
-
-void Print(RValue str);
 
 // Creates a hook for the specified script function.
 PFUNC_YYGMLScript CreateHook(AurieModule *module, const char *funcName, const char *hookIdentifier, PVOID hookFunction);
